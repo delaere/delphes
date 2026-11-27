@@ -59,8 +59,18 @@ public:
   virtual void Reset() = 0;
   // read the branch and fill elements for display
   virtual void ReadBranch() = 0;
-  // return the four-vectors of all elements
-  virtual std::vector<TLorentzVector> GetVectors() = 0;
+  // the four-vectors of the objects of a Delphes branch, whatever its class
+  // (only final-state particles for GenParticle)
+  static std::vector<TLorentzVector> Vectors(TClonesArray *branch);
+  std::vector<TLorentzVector> GetVectors() const { return Vectors(branch_); }
+
+  TClonesArray *GetBranch() const { return branch_; }
+  // the EVE element drawn for object i of the branch (nullptr if not drawn)
+  ROOT::Experimental::REveElement *GetItemElement(Int_t i) const
+  {
+    return (i >= 0 && i < (Int_t)items_.size()) ? items_[i] : nullptr;
+  }
+  Int_t GetNItemElements() const { return items_.size(); }
 
 protected:
   TString name_;
@@ -68,6 +78,7 @@ protected:
   TClonesArray *branch_;
   const enum EColor color_;
   Float_t tkRadius_, tkHalfLength_, tk_Bz_;
+  std::vector<ROOT::Experimental::REveElement *> items_; // one per object of the branch
 };
 
 // Concrete implementations. EveContainer can be
@@ -89,7 +100,6 @@ public:
   void SetTrackingVolume(Float_t r, Float_t l, Float_t Bz = 0.) override;
   void Reset() override;
   void ReadBranch() override;
-  std::vector<TLorentzVector> GetVectors() override;
 
 private:
   EveContainer *data_;
@@ -104,8 +114,6 @@ template <>
 void DelphesBranchElement7<DelphesCaloData7>::Reset();
 template <>
 void DelphesBranchElement7<DelphesCaloData7>::ReadBranch();
-template <>
-std::vector<TLorentzVector> DelphesBranchElement7<DelphesCaloData7>::GetVectors();
 
 // element lists (jets, missing transverse energy)
 template <>
@@ -116,8 +124,6 @@ template <>
 void DelphesBranchElement7<ROOT::Experimental::REveCompound>::Reset();
 template <>
 void DelphesBranchElement7<ROOT::Experimental::REveCompound>::ReadBranch();
-template <>
-std::vector<TLorentzVector> DelphesBranchElement7<ROOT::Experimental::REveCompound>::GetVectors();
 
 // track lists
 template <>
@@ -128,7 +134,5 @@ template <>
 void DelphesBranchElement7<ROOT::Experimental::REveTrackList>::Reset();
 template <>
 void DelphesBranchElement7<ROOT::Experimental::REveTrackList>::ReadBranch();
-template <>
-std::vector<TLorentzVector> DelphesBranchElement7<ROOT::Experimental::REveTrackList>::GetVectors();
 
 #endif // DelphesBranchElement7_h

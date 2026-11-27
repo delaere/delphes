@@ -70,24 +70,6 @@ void DelphesBranchElement7<DelphesCaloData7>::ReadBranch()
   data_->DataChanged();
 }
 
-template <>
-std::vector<TLorentzVector> DelphesBranchElement7<DelphesCaloData7>::GetVectors()
-{
-  std::vector<TLorentzVector> output;
-  if(TString(GetType()) == "Tower")
-  {
-    TIter itTower(branch_);
-    Tower *tower;
-    while((tower = (Tower *)itTower.Next()))
-    {
-      TLorentzVector v;
-      v.SetPtEtaPhiM(tower->Eem + tower->Ehad, (tower->Edges[0] + tower->Edges[1]) / 2., (tower->Edges[2] + tower->Edges[3]) / 2., 0.);
-      output.push_back(v);
-    }
-  }
-  return output;
-}
-
 //------------------------------------------------------------------------------
 // element lists: jets and missing transverse energy
 //------------------------------------------------------------------------------
@@ -107,7 +89,11 @@ void DelphesBranchElement7<REveCompound>::SetTrackingVolume(Float_t r, Float_t l
 }
 
 template <>
-void DelphesBranchElement7<REveCompound>::Reset() { data_->DestroyElements(); }
+void DelphesBranchElement7<REveCompound>::Reset()
+{
+  items_.clear();
+  data_->DestroyElements();
+}
 
 template <>
 void DelphesBranchElement7<REveCompound>::ReadBranch()
@@ -128,6 +114,7 @@ void DelphesBranchElement7<REveCompound>::ReadBranch()
       cone->SetPickable(kTRUE);
       cone->AddEllipticCone(jet->Eta, jet->Phi, jet->DeltaEta, jet->DeltaPhi);
       data_->AddElement(cone);
+      items_.push_back(cone);
       ++counter;
     }
   }
@@ -152,37 +139,9 @@ void DelphesBranchElement7<REveCompound>::ReadBranch()
       met->SetLineStyle(kDashed);
       met->SetPickable(kTRUE);
       data_->AddElement(met);
+      items_.push_back(met);
     }
   }
-}
-
-template <>
-std::vector<TLorentzVector> DelphesBranchElement7<REveCompound>::GetVectors()
-{
-  std::vector<TLorentzVector> output;
-  if(TString(GetType()) == "Jet")
-  {
-    TIter itJet(branch_);
-    Jet *jet;
-    while((jet = (Jet *)itJet.Next()))
-    {
-      TLorentzVector v;
-      v.SetPtEtaPhiM(jet->PT, jet->Eta, jet->Phi, jet->Mass);
-      output.push_back(v);
-    }
-  }
-  else if(TString(GetType()) == "MissingET")
-  {
-    TIter itMet(branch_);
-    MissingET *MET;
-    while((MET = (MissingET *)itMet.Next()))
-    {
-      TLorentzVector v;
-      v.SetPtEtaPhiM(MET->MET, MET->Eta, MET->Phi, 0.);
-      output.push_back(v);
-    }
-  }
-  return output;
 }
 
 //------------------------------------------------------------------------------
@@ -211,7 +170,11 @@ void DelphesBranchElement7<REveTrackList>::SetTrackingVolume(Float_t r, Float_t 
 }
 
 template <>
-void DelphesBranchElement7<REveTrackList>::Reset() { data_->DestroyElements(); }
+void DelphesBranchElement7<REveTrackList>::Reset()
+{
+  items_.clear();
+  data_->DestroyElements();
+}
 
 template <>
 void DelphesBranchElement7<REveTrackList>::ReadBranch()
@@ -231,6 +194,7 @@ void DelphesBranchElement7<REveTrackList>::ReadBranch()
     if(dashed) eveTrack->SetLineStyle(kDashed);
     eveTrack->SetPickable(kTRUE);
     data_->AddElement(eveTrack);
+    items_.push_back(eveTrack);
     eveTrack->MakeTrack();
   };
 
@@ -285,7 +249,11 @@ void DelphesBranchElement7<REveTrackList>::ReadBranch()
     GenParticle *particle;
     while((particle = (GenParticle *)itTrack.Next()))
     {
-      if(particle->Status != 1) continue;
+      if(particle->Status != 1)
+      {
+        items_.push_back(nullptr); // not drawn
+        continue;
+      }
       TParticle pb(particle->PID, particle->Status, particle->M1, particle->M2, particle->D1, particle->D2,
         particle->P4().Px(), particle->P4().Py(), particle->P4().Pz(), particle->P4().E(),
         particle->X / 10.0, particle->Y / 10.0, particle->Z / 10.0, particle->T / 10.0);
@@ -294,40 +262,53 @@ void DelphesBranchElement7<REveTrackList>::ReadBranch()
   }
 }
 
-template <>
-std::vector<TLorentzVector> DelphesBranchElement7<REveTrackList>::GetVectors()
+
+//------------------------------------------------------------------------------
+// four-vectors of the objects of any branch
+//------------------------------------------------------------------------------
+
+std::vector<TLorentzVector> DelphesBranchBase7::Vectors(TClonesArray *branch)
 {
   std::vector<TLorentzVector> output;
-  TString type = GetType();
-  TIter itTrack(branch_);
-  if(type == "Track")
+  if(!branch) return output;
+  TString type = branch->GetClass()->GetName();
+  TIter it(branch);
+  TObject *object;
+  while((object = it.Next()))
   {
-    Track *track;
-    while((track = (Track *)itTrack.Next())) output.push_back(track->P4());
-  }
-  else if(type == "Electron")
-  {
-    Electron *electron;
-    while((electron = (Electron *)itTrack.Next())) output.push_back(electron->P4());
-  }
-  else if(type == "Muon")
-  {
-    Muon *muon;
-    while((muon = (Muon *)itTrack.Next())) output.push_back(muon->P4());
-  }
-  else if(type == "Photon")
-  {
-    Photon *photon;
-    while((photon = (Photon *)itTrack.Next())) output.push_back(photon->P4());
-  }
-  else if(type == "GenParticle")
-  {
-    GenParticle *particle;
-    while((particle = (GenParticle *)itTrack.Next()))
+    TLorentzVector v;
+    if(type == "Jet")
     {
-      if(particle->Status != 1) continue;
-      output.push_back(particle->P4());
+      Jet *jet = (Jet *)object;
+      v.SetPtEtaPhiM(jet->PT, jet->Eta, jet->Phi, jet->Mass);
     }
+    else if(type == "MissingET")
+    {
+      MissingET *met = (MissingET *)object;
+      v.SetPtEtaPhiM(met->MET, met->Eta, met->Phi, 0.);
+    }
+    else if(type == "Tower")
+    {
+      Tower *tower = (Tower *)object;
+      v.SetPtEtaPhiM(tower->ET, tower->Eta, tower->Phi, 0.);
+    }
+    else if(type == "Track")
+      v = ((Track *)object)->P4();
+    else if(type == "Electron")
+      v = ((Electron *)object)->P4();
+    else if(type == "Muon")
+      v = ((Muon *)object)->P4();
+    else if(type == "Photon")
+      v = ((Photon *)object)->P4();
+    else if(type == "GenParticle")
+    {
+      GenParticle *particle = (GenParticle *)object;
+      if(particle->Status != 1) continue;
+      v = particle->P4();
+    }
+    else
+      continue;
+    output.push_back(v);
   }
   return output;
 }

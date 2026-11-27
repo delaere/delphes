@@ -16,14 +16,38 @@ root -l examples/EventDisplay7.C'("cards/delphes_card_CMS.tcl","delphes_output.r
 ```
 
 The display opens in a web browser: a 3D view, R-Phi and Rho-Z projections,
-and an eta-phi lego of the calorimeter towers. The toolbar buttons navigate
-through the events. From the ROOT prompt:
+an eta-phi lego of the calorimeter towers and the particle list. The toolbar
+buttons navigate through the events. From the ROOT prompt:
 
 ```
 delphesDisplay7->GotoEvent(42);
 delphesDisplay7->NextEvent();
 delphesDisplay7->PreviousEvent();
 ```
+
+### Particle list
+
+The "Table" view lists the objects of each branch (choose the branch in the
+drop-down list). Selecting a row highlights the object in all views, and
+picking an object in a view selects its row. "Edit Collection Columns" adds
+columns from C++ expressions on the object `i`, e.g. `i.BTag` for a jet.
+Hovering an object in a view shows the first columns as a tooltip.
+
+### Summary page
+
+The "Summary" button opens a second page with, for each branch, the
+multiplicity, pT, eta and phi of the objects of the current event. "Fill from
+sample" reads all events and adds the sample distributions (all, leading and
+subleading objects, per event) for comparison. The page also navigates
+through the events (buttons, event number, left/right arrow keys).
+
+```
+delphesDisplay7->ShowSummary();  // open the page
+delphesDisplay7->FillSummary();  // fill the sample distributions now
+```
+
+With `root --web=server`, the address of the page is printed when it is
+opened.
 
 ## Differences with the classic display
 
@@ -32,7 +56,8 @@ delphesDisplay7->PreviousEvent();
 - The lego is drawn by JSROOT from a `THStack` of two `TH2F` (ECAL, HCAL),
   filled at the tower centres; EVE7 has no native lego renderer.
 - The calorimeter and muon endcaps are not drawn in the R-Phi projection.
-- Not ported yet: the HTML summary tables and the summary plots.
+- The HTML summary tables are replaced by the "Table" view, linked to the
+  other views, and the summary plots by the summary page.
 
 ## Implementation notes
 
@@ -49,5 +74,14 @@ delphesDisplay7->PreviousEvent();
   (boolean) shapes of `Delphes3DGeometry`. The volumes are axially symmetric,
   so their R-Z cross-sections are computed by casting radial rays through the
   TGeo shapes, and drawn as filled polygons (Rho-Z) and rings (R-Phi).
+- The particle list uses `REveDataCollection` and `REveTableProxyBuilder`,
+  one collection per branch, pointing to the objects of the current entry. A
+  selection deviator maps picked objects to (collection, row), and the rows
+  back to the drawn objects and their projections.
+- The summary page is an `RWebWindow` served by the same server, with its
+  HTML embedded in the library (`DelphesSummaryPage7.inc`). It is updated
+  from the main thread by a ROOT timer, and fills the sample with its own
+  tree reader, in short slices so that the display stays responsive. The page
+  draws the histograms with JSROOT and sets their style.
 - `Delphes3DGeometry` (pure TGeo) is shared with `display/` and compiled into
   both libraries.

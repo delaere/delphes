@@ -9,6 +9,11 @@
  *   delphesDisplay7->GotoEvent(42);
  *   delphesDisplay7->NextEvent();
  *   delphesDisplay7->PreviousEvent();
+ *
+ * The "Table" view lists the objects of each branch. The "Summary" button opens a
+ * page with the distributions of the event and of the sample:
+ *   delphesDisplay7->ShowSummary();
+ *   delphesDisplay7->FillSummary();
  */
 
 #ifdef __CLING__

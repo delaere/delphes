@@ -33,6 +33,8 @@ class THStack;
 class Delphes3DGeometry;
 class DelphesBranchBase7;
 class DelphesCaloData7;
+class DelphesParticleTable7;
+class DelphesSummary7;
 class DelphesEventDisplay7;
 class ExRootTreeReader;
 
@@ -63,6 +65,7 @@ public:
   void PreviousEvent();
   void FirstEvent();
   void LastEvent();
+  void ShowSummary();
   void QuitRoot();
 
 private:
@@ -96,6 +99,10 @@ public:
 
   // navigation from the web interface (the caller holds the change guard)
   void LoadEvent(Long64_t event);
+
+  // summary page: distributions of the event and of the sample
+  void ShowSummary(); // opens it (from any thread)
+  void FillSummary(); // reads the whole sample now (main thread)
 
 private:
   void readConfig(const char *configFile);
@@ -132,6 +139,9 @@ private:
   TCanvas *legoCanvas_;
   TH2F *legoEcal_, *legoHcal_;
   THStack *legoStack_;
+
+  DelphesParticleTable7 *table_;
+  DelphesSummary7 *summary_;
 };
 
 #endif // DelphesEventDisplay7_h

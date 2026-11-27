@@ -44,11 +44,15 @@
 
 #include <ROOT/REveCalo.hxx>
 #include <ROOT/REveCompound.hxx>
+#include <ROOT/REveDataCollection.hxx>
+#include <ROOT/REveDataTable.hxx>
 #include <ROOT/REveGeoShape.hxx>
 #include <ROOT/REveJetCone.hxx>
 #include <ROOT/REveManager.hxx>
 #include <ROOT/REveProjectionManager.hxx>
 #include <ROOT/REveScene.hxx>
+#include <ROOT/REveSelection.hxx>
+#include <ROOT/REveTableInfo.hxx>
 #include <ROOT/REveStraightLineSet.hxx>
 #include <ROOT/REveTrackProjected.hxx>
 #include <ROOT/REveTrans.hxx>
@@ -58,6 +62,8 @@
 #include "display7/DelphesBranchElement7.h"
 #include "display7/DelphesCaloData7.h"
 #include "display7/DelphesEventDisplay7.h"
+#include "display7/DelphesParticleTable7.h"
+#include "display7/DelphesSummary7.h"
 
 #include "external/ExRootAnalysis/ExRootConfReader.h"
 #include "external/ExRootAnalysis/ExRootTreeReader.h"
@@ -348,6 +354,11 @@ void DelphesEventNavigator7::LastEvent()
   display_->LoadEvent(display_->GetEntries() - 1);
 }
 
+void DelphesEventNavigator7::ShowSummary()
+{
+  display_->ShowSummary();
+}
+
 void DelphesEventNavigator7::QuitRoot()
 {
   REveManager::QuitRoot();
@@ -393,7 +404,9 @@ DelphesEventDisplay7::DelphesEventDisplay7(const char *configFile, const char *i
   legoCanvas_(nullptr),
   legoEcal_(nullptr),
   legoHcal_(nullptr),
-  legoStack_(nullptr)
+  legoStack_(nullptr),
+  table_(nullptr),
+  summary_(nullptr)
 {
   // initialize the application
   eveMng_ = REveManager::Create();
@@ -410,6 +423,7 @@ DelphesEventDisplay7::DelphesEventDisplay7(const char *configFile, const char *i
   eveMng_->GetWorld()->AddCommand("Next event", "sap-icon://media-forward", navigator_, "NextEvent()");
   eveMng_->GetWorld()->AddCommand("First event", "sap-icon://close-command-field", navigator_, "FirstEvent()");
   eveMng_->GetWorld()->AddCommand("Last event", "sap-icon://open-command-field", navigator_, "LastEvent()");
+  eveMng_->GetWorld()->AddCommand("Summary", "sap-icon://area-chart", navigator_, "ShowSummary()");
   eveMng_->GetWorld()->AddCommand("Quit", "sap-icon://log", navigator_, "QuitRoot()");
 
   // the detector
@@ -437,6 +451,11 @@ DelphesEventDisplay7::DelphesEventDisplay7(const char *configFile, const char *i
     buildLego(calo);
   }
 
+  // the particle list (Table view) and the summary page
+  table_ = new DelphesParticleTable7(eveMng_, elements_);
+  summary_ = new DelphesSummary7(inputFile, elements_);
+  summary_->SetNavigation([this](Long64_t event) { GotoEvent(event); });
+
   // first event
   loadEvent();
 
@@ -461,7 +480,9 @@ void DelphesEventDisplay7::warmUpClasses()
         &typeid(REveTrackList), &typeid(REveTrackListProjected),
         &typeid(REveTrack), &typeid(REveTrackProjected),
         &typeid(REveCalo3D), &typeid(REveCalo2D),
-        &typeid(REveGeoShape), &typeid(REveGeoShapeProjected)})
+        &typeid(REveGeoShape), &typeid(REveGeoShapeProjected),
+        &typeid(REveDataCollection), &typeid(REveDataItemList), &typeid(REveDataTable),
+        &typeid(REveDataColumn), &typeid(REveTableViewInfo)})
   {
     TClass::GetClass(*type);
   }
@@ -481,9 +502,23 @@ void DelphesEventDisplay7::warmUpClasses()
 DelphesEventDisplay7::~DelphesEventDisplay7()
 {
   // the EVE elements are owned by the EVE manager
+  delete summary_;
+  delete table_;
   for(auto *element : elements_) delete element;
   delete treeReader_;
   delete chain_;
+}
+
+//------------------------------------------------------------------------------
+
+void DelphesEventDisplay7::ShowSummary()
+{
+  summary_->RequestShow();
+}
+
+void DelphesEventDisplay7::FillSummary()
+{
+  summary_->FillSample();
 }
 
 //------------------------------------------------------------------------------
@@ -764,6 +799,10 @@ void DelphesEventDisplay7::LoadEvent(Long64_t event)
 
 void DelphesEventDisplay7::loadEvent()
 {
+  // the selected objects are about to disappear
+  eveMng_->GetSelection()->ClearSelection();
+  eveMng_->GetHighlight()->ClearSelection();
+
   // drop the projections of the previous event before its content
   rphiEventScene_->DestroyElements();
   rhozEventScene_->DestroyElements();
@@ -775,6 +814,8 @@ void DelphesEventDisplay7::loadEvent()
 
   fillLego();
   projectEvent();
+  if(table_) table_->LoadEvent();
+  if(summary_) summary_->SetEvent(event_id_, GetEntries());
 
   navigator_->SetName(Form("Event %lld / %lld", event_id_, GetEntries()));
   navigator_->StampObjProps();
