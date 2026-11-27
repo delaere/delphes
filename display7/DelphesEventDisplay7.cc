@@ -204,7 +204,7 @@ std::vector<Polygon2D> crossSections(const TGeoNode *node, double phi, int nLine
       int match = -1;
       if(intervalCount[j] == 1)
         for(size_t p = 0; p < open.size(); ++p)
-          if(openCount[p] == 1 && overlap(open[p].lo.back(), open[p].hi.back(), intervals[j].first, intervals[j].second)) match = p;
+          if(!extended[p] && openCount[p] == 1 && overlap(open[p].lo.back(), open[p].hi.back(), intervals[j].first, intervals[j].second)) match = p;
       if(match >= 0)
       {
         extended[match] = true;
