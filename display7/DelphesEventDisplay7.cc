@@ -249,6 +249,14 @@ std::vector<Polygon2D> crossSections(const TGeoNode *node, double phi, int nLine
   return polygons;
 }
 
+// projected elements are pickable when their source is
+void copyPickable(REveElement *projected)
+{
+  if(auto *p = dynamic_cast<REveProjected *>(projected))
+    if(auto *source = dynamic_cast<REveElement *>(p->GetProjectable())) projected->SetPickable(source->IsPickable());
+  for(auto *child : projected->RefChildren()) copyPickable(child);
+}
+
 // filled polygon with its outline, in the plane of the projected views
 void addPolygon(REveElement *parent, const char *name, const Polygon2D &polygon, Color_t color, Char_t transparency)
 {
@@ -424,6 +432,7 @@ DelphesEventDisplay7::DelphesEventDisplay7(const char *configFile, const char *i
     auto *calo3d = new REveCalo3D(calo, "Calorimeter towers");
     calo3d->SetBarrelRadius(tkRadius_);
     calo3d->SetEndCapPos(tkHalfLength_);
+    calo3d->SetPickable(kTRUE);
     eveMng_->GetEventScene()->AddElement(calo3d);
     buildLego(calo);
   }
@@ -505,7 +514,7 @@ void DelphesEventDisplay7::buildGeometry(Delphes3DGeometry &det3D)
     shape->RefMainTrans().SetFrom(*node->GetMatrix());
     shape->SetMainColor(volume->GetLineColor());
     shape->SetMainTransparency(volume->GetTransparency());
-    shape->SetPickable(kTRUE);
+    shape->SetPickable(kFALSE); // hovering and clicking should reach the event data
     geometry->AddElement(shape);
   }
   eveMng_->GetGlobalScene()->AddElement(geometry);
@@ -782,7 +791,9 @@ void DelphesEventDisplay7::projectEvent()
     for(auto mgrScene : {std::make_pair(rphiMgr_, rphiEventScene_), std::make_pair(rhozMgr_, rhozEventScene_)})
     {
       REveElement *projected = mgrScene.first->ImportElements(el, mgrScene.second);
-      if(projected) projected->SetRnrSelfChildren(el->GetRnrSelf(), el->GetRnrChildren());
+      if(!projected) continue;
+      projected->SetRnrSelfChildren(el->GetRnrSelf(), el->GetRnrChildren());
+      copyPickable(projected);
     }
   }
 }

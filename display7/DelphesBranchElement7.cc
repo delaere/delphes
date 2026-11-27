@@ -229,6 +229,7 @@ void DelphesBranchElement7<REveTrackList>::ReadBranch()
     eveTrack->SetAttLineAttMarker(data_);
     eveTrack->SetMainColor(GetColor());
     if(dashed) eveTrack->SetLineStyle(kDashed);
+    eveTrack->SetPickable(kTRUE);
     data_->AddElement(eveTrack);
     eveTrack->MakeTrack();
   };
