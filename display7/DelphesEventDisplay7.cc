@@ -17,6 +17,8 @@
  */
 
 #include <functional>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <typeinfo>
@@ -29,9 +31,14 @@
 #include "TChain.h"
 #include "TClass.h"
 #include "TClonesArray.h"
+#include "TGeoBBox.h"
 #include "TGeoManager.h"
+#include "TGeoMatrix.h"
 #include "TGeoNode.h"
+#include "TGeoTube.h"
 #include "TGeoVolume.h"
+#include "TGeoXtru.h"
+#include "TMath.h"
 #include "TH2F.h"
 #include "THStack.h"
 
@@ -56,6 +63,253 @@
 #include "external/ExRootAnalysis/ExRootTreeReader.h"
 
 using namespace ROOT::Experimental;
+
+//------------------------------------------------------------------------------
+// 2D cross-sections of the detector volumes
+//
+// EVE7 projects geometry by rebuilding polygons from the tessellated mesh,
+// which fails for the composite (boolean) shapes of Delphes3DGeometry. The
+// volumes are all axially symmetric, so their R-Z cross-sections are computed
+// here by casting radial rays through the TGeo shapes, and drawn directly in
+// the projected scenes.
+//------------------------------------------------------------------------------
+
+namespace
+{
+
+typedef std::pair<double, double> Point2D;
+typedef std::vector<Point2D> Polygon2D;
+
+// depth of the geometry in the projected scenes (event data is at depth 0)
+const double kFillDepth = -20.;
+const double kLineDepth = -10.;
+
+// intervals [r1, r2] of the ray from the beam axis at (z, phi) inside the shape
+std::vector<Point2D> radialIntervals(const TGeoShape *shape, const TGeoMatrix *matrix, double z, double phi, double rmax)
+{
+  std::vector<Point2D> intervals;
+  const double masterPoint[3] = {0., 0., z};
+  const double masterDir[3] = {std::cos(phi), std::sin(phi), 0.};
+  double point[3], dir[3];
+  matrix->MasterToLocal(masterPoint, point);
+  matrix->MasterToLocalVect(masterDir, dir);
+
+  const double eps = 1e-7 * rmax;
+  double r = 0., start = 0.;
+  bool inside = shape->Contains(point);
+  for(int iter = 0; iter < 1000 && r < rmax; ++iter)
+  {
+    double step = inside ? shape->DistFromInside(point, dir, 3) : shape->DistFromOutside(point, dir, 3);
+    if(step >= TGeoShape::Big() || r + step >= rmax)
+    {
+      if(inside) intervals.emplace_back(start, std::min(r + step, rmax));
+      break;
+    }
+    r += step + eps;
+    for(int k = 0; k < 3; ++k) point[k] += (step + eps) * dir[k];
+    bool nowInside = shape->Contains(point);
+    if(nowInside == inside) continue; // grazing a surface
+    if(inside)
+      intervals.emplace_back(start, r - eps);
+    else
+      start = r - eps;
+    inside = nowInside;
+  }
+  return intervals;
+}
+
+// Ramer-Douglas-Peucker simplification of an open polyline
+void simplify(const Polygon2D &in, size_t first, size_t last, double tolerance, Polygon2D &out)
+{
+  double dx = in[last].first - in[first].first, dy = in[last].second - in[first].second;
+  double norm = std::hypot(dx, dy);
+  double dmax = 0.;
+  size_t imax = first;
+  for(size_t i = first + 1; i < last; ++i)
+  {
+    double ex = in[i].first - in[first].first, ey = in[i].second - in[first].second;
+    double d = norm > 0. ? std::fabs(ex * dy - ey * dx) / norm : std::hypot(ex, ey);
+    if(d > dmax)
+    {
+      dmax = d;
+      imax = i;
+    }
+  }
+  if(dmax > tolerance)
+  {
+    simplify(in, first, imax, tolerance, out);
+    simplify(in, imax, last, tolerance, out);
+  }
+  else
+  {
+    out.push_back(in[last]);
+  }
+}
+
+Polygon2D simplify(const Polygon2D &in, double tolerance)
+{
+  if(in.size() < 3) return in;
+  Polygon2D out{in.front()};
+  simplify(in, 0, in.size() - 1, tolerance, out);
+  return out;
+}
+
+// cross-sections (z, rho) of a placed volume in the half-plane at azimuth phi
+std::vector<Polygon2D> crossSections(const TGeoNode *node, double phi, int nLines = 2000)
+{
+  const TGeoShape *shape = node->GetVolume()->GetShape();
+  const TGeoMatrix *matrix = node->GetMatrix();
+
+  // extent of the volume from its bounding box
+  const TGeoBBox *box = static_cast<const TGeoBBox *>(shape);
+  const double *origin = box->GetOrigin();
+  double zmin = TGeoShape::Big(), zmax = -TGeoShape::Big(), rmax = 0.;
+  for(int i = 0; i < 8; ++i)
+  {
+    double local[3] = {origin[0] + ((i & 1) ? 1 : -1) * box->GetDX(),
+      origin[1] + ((i & 2) ? 1 : -1) * box->GetDY(),
+      origin[2] + ((i & 4) ? 1 : -1) * box->GetDZ()};
+    double master[3];
+    matrix->LocalToMaster(local, master);
+    zmin = std::min(zmin, master[2]);
+    zmax = std::max(zmax, master[2]);
+    rmax = std::max(rmax, std::hypot(master[0], master[1]));
+  }
+  rmax *= 1.01;
+  const double dz = (zmax - zmin) / nLines;
+
+  // scan along z; a piece is a run of scan lines with one matching interval each
+  struct Piece
+  {
+    std::vector<double> z, lo, hi;
+  };
+  std::vector<Piece> finished, open;
+  auto overlap = [](double a1, double a2, double b1, double b2) { return a1 <= b2 && b1 <= a2; };
+  for(int i = 0; i < nLines; ++i)
+  {
+    double z = zmin + (i + 0.5) * dz;
+    std::vector<Point2D> intervals = radialIntervals(shape, matrix, z, phi, rmax);
+    std::vector<int> openCount(open.size(), 0), intervalCount(intervals.size(), 0);
+    for(size_t p = 0; p < open.size(); ++p)
+      for(size_t j = 0; j < intervals.size(); ++j)
+        if(overlap(open[p].lo.back(), open[p].hi.back(), intervals[j].first, intervals[j].second))
+        {
+          ++openCount[p];
+          ++intervalCount[j];
+        }
+    std::vector<Piece> next;
+    std::vector<bool> extended(open.size(), false);
+    for(size_t j = 0; j < intervals.size(); ++j)
+    {
+      int match = -1;
+      if(intervalCount[j] == 1)
+        for(size_t p = 0; p < open.size(); ++p)
+          if(openCount[p] == 1 && overlap(open[p].lo.back(), open[p].hi.back(), intervals[j].first, intervals[j].second)) match = p;
+      if(match >= 0)
+      {
+        extended[match] = true;
+        next.push_back(std::move(open[match]));
+      }
+      else
+      {
+        next.emplace_back();
+      }
+      next.back().z.push_back(z);
+      next.back().lo.push_back(intervals[j].first);
+      next.back().hi.push_back(intervals[j].second);
+    }
+    for(size_t p = 0; p < open.size(); ++p)
+      if(!extended[p]) finished.push_back(std::move(open[p]));
+    open = std::move(next);
+  }
+  for(auto &piece : open) finished.push_back(std::move(piece));
+
+  // each piece becomes a polygon: lower edge forward, upper edge backward;
+  // the ends are moved half a scan step out, onto the actual boundary
+  const double tolerance = 1e-4 * std::max(zmax - zmin, rmax);
+  std::vector<Polygon2D> polygons;
+  for(auto &piece : finished)
+  {
+    size_t n = piece.z.size();
+    Polygon2D lower, upper;
+    lower.emplace_back(piece.z.front() - dz / 2., piece.lo.front());
+    upper.emplace_back(piece.z.front() - dz / 2., piece.hi.front());
+    for(size_t k = 0; k < n; ++k)
+    {
+      lower.emplace_back(piece.z[k], piece.lo[k]);
+      upper.emplace_back(piece.z[k], piece.hi[k]);
+    }
+    lower.emplace_back(piece.z.back() + dz / 2., piece.lo.back());
+    upper.emplace_back(piece.z.back() + dz / 2., piece.hi.back());
+    Polygon2D polygon = simplify(lower, tolerance);
+    upper = simplify(upper, tolerance);
+    polygon.insert(polygon.end(), upper.rbegin(), upper.rend());
+    polygons.push_back(std::move(polygon));
+  }
+  return polygons;
+}
+
+// filled polygon with its outline, in the plane of the projected views
+void addPolygon(REveElement *parent, const char *name, const Polygon2D &polygon, Color_t color, Char_t transparency)
+{
+  std::vector<double> x, y;
+  for(const auto &p : polygon)
+  {
+    x.push_back(p.first);
+    y.push_back(p.second);
+  }
+  auto *xtru = new TGeoXtru(2);
+  xtru->DefinePolygon(x.size(), x.data(), y.data());
+  xtru->DefineSection(0, kFillDepth - 0.5);
+  xtru->DefineSection(1, kFillDepth + 0.5);
+  auto *fill = new REveGeoShape(name);
+  fill->SetShape(xtru);
+  fill->SetMainColor(color);
+  fill->SetMainTransparency(transparency);
+  fill->SetPickable(kFALSE);
+  parent->AddElement(fill);
+
+  auto *outline = new REveStraightLineSet(Form("%s outline", name));
+  for(size_t i = 0; i < x.size(); ++i)
+  {
+    size_t j = (i + 1) % x.size();
+    outline->AddLine(x[i], y[i], kLineDepth, x[j], y[j], kLineDepth);
+  }
+  outline->SetLineColor(color);
+  outline->SetPickable(kFALSE);
+  parent->AddElement(outline);
+}
+
+// filled ring with its outline, in the R-Phi view
+void addRing(REveElement *parent, const char *name, double rmin, double rmax, Color_t color, Char_t transparency)
+{
+  const int nSegments = 72;
+  auto *fill = new REveGeoShape(name);
+  fill->SetShape(new TGeoTube(rmin, rmax, 0.5));
+  fill->SetNSegments(nSegments);
+  fill->InitMainTrans();
+  fill->RefMainTrans().SetPos(0., 0., kFillDepth);
+  fill->SetMainColor(color);
+  fill->SetMainTransparency(transparency);
+  fill->SetPickable(kFALSE);
+  parent->AddElement(fill);
+
+  auto *outline = new REveStraightLineSet(Form("%s outline", name));
+  for(double r : {rmin, rmax})
+  {
+    if(r <= 0.) continue;
+    for(int i = 0; i < nSegments; ++i)
+    {
+      double a1 = TMath::TwoPi() * i / nSegments, a2 = TMath::TwoPi() * (i + 1) / nSegments;
+      outline->AddLine(r * std::cos(a1), r * std::sin(a1), kLineDepth, r * std::cos(a2), r * std::sin(a2), kLineDepth);
+    }
+  }
+  outline->SetLineColor(color);
+  outline->SetPickable(kFALSE);
+  parent->AddElement(outline);
+}
+
+} // namespace
 
 //------------------------------------------------------------------------------
 // DelphesEventNavigator7
@@ -279,14 +533,36 @@ void DelphesEventDisplay7::buildViews()
   rhozView->AddScene(rhozGeomScene_);
   rhozView->AddScene(rhozEventScene_);
 
-  // project the geometry once; endcaps would cover the whole R-Phi view
-  for(auto *el : eveMng_->GetGlobalScene()->RefChildren())
+  // draw the cross-sections of the detector volumes (see crossSections);
+  // the endcaps would cover the whole R-Phi view, they are only drawn in Rho-Z
+  auto *rphiGeom = new REveElement("Geometry");
+  auto *rhozGeom = new REveElement("Geometry");
+  rphiGeomScene_->AddElement(rphiGeom);
+  rhozGeomScene_->AddElement(rhozGeom);
+  TIter itNodes(gGeoManager->GetTopVolume()->GetNodes());
+  TGeoNode *node;
+  while((node = (TGeoNode *)itNodes.Next()))
   {
-    for(auto *shape : el->RefChildren())
+    TGeoVolume *volume = node->GetVolume();
+    Color_t color = volume->GetLineColor();
+    Char_t transparency = volume->GetTransparency();
+    double rmin = TGeoShape::Big(), rmax = 0.;
+    for(double phi : {TMath::PiOver2(), -TMath::PiOver2()})
     {
-      if(!TString(shape->GetCName()).Contains("endcap")) rphiMgr_->ImportElements(shape, rphiGeomScene_);
-      rhozMgr_->ImportElements(shape, rhozGeomScene_);
+      double sign = phi > 0. ? 1. : -1.;
+      for(auto &polygon : crossSections(node, phi))
+      {
+        for(auto &p : polygon)
+        {
+          rmin = std::min(rmin, p.second);
+          rmax = std::max(rmax, p.second);
+          p.second *= sign;
+        }
+        addPolygon(rhozGeom, node->GetName(), polygon, color, transparency);
+      }
     }
+    if(rmax > 0. && !TString(node->GetName()).Contains("endcap"))
+      addRing(rphiGeom, node->GetName(), rmin < 1e-3 * rmax ? 0. : rmin, rmax, color, transparency);
   }
 }
 

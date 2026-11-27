@@ -44,5 +44,10 @@ delphesDisplay7->PreviousEvent();
   `REveManager::Show()`. Otherwise the web server threads build them when a
   browser connects, which runs the interpreter in a thread with a small stack
   and crashes.
+- The detector is not projected by EVE7 in the 2D views: its projection
+  rebuilds outlines from the tessellated mesh, which fails for the composite
+  (boolean) shapes of `Delphes3DGeometry`. The volumes are axially symmetric,
+  so their R-Z cross-sections are computed by casting radial rays through the
+  TGeo shapes, and drawn as filled polygons (Rho-Z) and rings (R-Phi).
 - `Delphes3DGeometry` (pure TGeo) is shared with `display/` and compiled into
   both libraries.
