@@ -315,7 +315,8 @@ void DelphesSummary7::sendInit(unsigned connid)
   {
     const Collection &c = collections_[i];
     out << (i ? "," : "") << "{\"name\":" << jsonString(c.name) << ",\"type\":" << jsonString(c.type)
-        << ",\"color\":" << jsonString(hexColor(c.color)) << "}";
+        << ",\"color\":" << jsonString(hexColor(c.color))
+        << ",\"shown\":" << (c.branch->GetElement()->GetRnrSelf() ? "true" : "false") << "}";
   }
   out << "]}";
   window_->Send(connid, out.str());

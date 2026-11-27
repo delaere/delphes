@@ -188,7 +188,9 @@ function init(data) {
   setMessage(collections.length ? '' : 'No collections to show');
   const keep = collections.find(c => c.name === selected);
   selected = null;
-  if (collections.length) select(keep ? keep.name : collections[0].name);
+  // by default, the first branch displayed in the views
+  const first = collections.find(c => c.shown) || collections[0];
+  if (collections.length) select(keep ? keep.name : first.name);
 }
 
 function showEvent(data) {

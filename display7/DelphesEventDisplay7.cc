@@ -708,7 +708,6 @@ void DelphesEventDisplay7::readConfig(const char *configFile)
       if(input.Contains("GenJetFinder"))
       {
         elist = new DelphesBranchElement7<REveCompound>(name, treeReader_->UseBranch(name), kCyan);
-        elist->GetContainer()->SetRnrSelfChildren(kFALSE, kFALSE);
       }
       else
       {
@@ -745,9 +744,15 @@ void DelphesEventDisplay7::readConfig(const char *configFile)
     {
       tlist = new DelphesBranchElement7<REveTrackList>(name, treeReader_->UseBranch(name), kCyan);
       tlist->SetTrackingVolume(tkRadius_, tkHalfLength_, bz_);
-      tlist->GetContainer()->SetRnrSelfChildren(kFALSE, kFALSE);
       elements_.push_back(tlist);
     }
+    else
+      continue;
+
+    // generator-level objects (particles, jets, missing ET) are hidden by
+    // default; they can be shown from the tree of the web interface
+    bool generated = className == "GenParticle" || input.BeginsWith("Gen") || name.BeginsWith("Gen");
+    if(generated) elements_.back()->GetElement()->SetRnrSelfChildren(kFALSE, kFALSE);
   }
   // second loop for tracks
   for(Int_t b = 0; b < nBranches; ++b)
