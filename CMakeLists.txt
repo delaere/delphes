@@ -31,7 +31,7 @@ ENDIF(SET_RPATH)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
 
 # Declare ROOT dependency
-find_package(ROOT REQUIRED COMPONENTS EG Eve Gui GuiHtml)
+find_package(ROOT REQUIRED COMPONENTS EG Eve Gui GuiHtml OPTIONAL_COMPONENTS ROOTEve ROOTWebDisplay RHTTP)
 set(CMAKE_CXX_STANDARD ${ROOT_CXX_STANDARD})
 
 # Declare Pythia8 dependancy
@@ -58,6 +58,10 @@ set(DelphesExternals_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/external)
 add_subdirectory(classes)
 add_subdirectory(converters)
 add_subdirectory(display)
+# EVE7 (web-based) event display, only if ROOT was built with root7 and webgui
+if(TARGET ROOT::ROOTEve)
+  add_subdirectory(display7)
+endif()
 add_subdirectory(examples)
 add_subdirectory(external)
 add_subdirectory(modules)
@@ -88,3 +92,11 @@ add_library(DelphesDisplay SHARED
 target_link_libraries(DelphesDisplay PUBLIC Delphes ROOT::Geom ROOT::Graf3d ROOT::RGL ROOT::Eve ROOT::GuiHtml)
 
 install(TARGETS Delphes DelphesDisplay DESTINATION lib)
+
+if(TARGET ROOT::ROOTEve)
+  add_library(DelphesDisplay7 SHARED
+    $<TARGET_OBJECTS:display7>
+  )
+  target_link_libraries(DelphesDisplay7 PUBLIC Delphes ROOT::Geom ROOT::Gpad ROOT::RHTTP ROOT::ROOTWebDisplay ROOT::ROOTEve)
+  install(TARGETS DelphesDisplay7 DESTINATION lib)
+endif()
