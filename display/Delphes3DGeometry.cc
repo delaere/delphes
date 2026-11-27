@@ -38,6 +38,7 @@
 #include "TGeoVolume.h"
 #include "TH1F.h"
 #include "TMath.h"
+#include "TError.h"
 #include "TString.h"
 
 #include "display/Delphes3DGeometry.h"
@@ -46,6 +47,66 @@
 #include "external/ExRootAnalysis/ExRootConfReader.h"
 
 using namespace std;
+
+namespace
+{
+
+// Eta coverage of an efficiency formula of the Efficiency module, i.e. the
+// largest |eta| where it is non-zero. Returns defaultValue (with a warning)
+// when the formula cannot be evaluated here.
+Double_t etaCoverage(TString formula, const char *module, Double_t defaultValue)
+{
+  // TF2 variables: x = pt, y = eta
+  formula.ReplaceAll("energy", "(x*cosh(y))");
+  formula.ReplaceAll("pt", "x");
+  formula.ReplaceAll("eta", "y");
+  formula.ReplaceAll("phi", "0.");
+
+  TString buffer;
+  for(const char *it = formula.Data(); *it; ++it)
+  {
+    if(*it == ' ' || *it == '\t' || *it == '\r' || *it == '\n' || *it == '\\') continue;
+    buffer.Append(*it);
+  }
+
+  // invalid formulas make TF2::GetRandom2 print errors forever
+  Int_t errorLevel = gErrorIgnoreLevel;
+  gErrorIgnoreLevel = kFatal;
+  TF2 effFunction("Delphes3DGeometry_eff", buffer, 0, 1000, -10, 10);
+  gErrorIgnoreLevel = errorLevel;
+  if(!effFunction.IsValid())
+  {
+    Warning("Delphes3DGeometry::readFile", "cannot evaluate %s::EfficiencyFormula, using |eta| < %g", module, defaultValue);
+    return defaultValue;
+  }
+
+  // a formula that is zero everywhere cannot be sampled
+  Bool_t nonZero = kFALSE;
+  for(int i = 0; i <= 100 && !nonZero; ++i)
+    for(int j = 0; j <= 100 && !nonZero; ++j)
+      nonZero = effFunction.Eval(i * 10., -10. + j * 0.2) > 0.;
+  if(!nonZero)
+  {
+    Warning("Delphes3DGeometry::readFile", "%s::EfficiencyFormula is zero everywhere, using |eta| < %g", module, defaultValue);
+    return defaultValue;
+  }
+
+  TH1F etaHisto("Delphes3DGeometry_eta", "eta", 100, 5., -5.);
+  etaHisto.SetDirectory(nullptr);
+  Double_t pt, eta;
+  for(int i = 0; i < 1000; ++i)
+  {
+    effFunction.GetRandom2(pt, eta);
+    etaHisto.Fill(eta);
+  }
+  Int_t bin = etaHisto.FindFirstBinAbove(0.5);
+  Double_t etamin = (bin > -1) ? etaHisto.GetBinLowEdge(bin) : -10.;
+  bin = etaHisto.FindLastBinAbove(0.5);
+  Double_t etamax = (bin > -1) ? etaHisto.GetBinLowEdge(bin + 1) : -10.;
+  return TMath::Max(fabs(etamin), fabs(etamax));
+}
+
+} // namespace
 
 Delphes3DGeometry::Delphes3DGeometry(TGeoManager *geom, bool transp)
 {
@@ -99,69 +160,10 @@ void Delphes3DGeometry::readFile(const char *configFile,
   tk_length_ = confReader->GetDouble(Form("%s::HalfLength", ParticlePropagator), 3.0) * 100.; // tk_length
   tk_Bz_ = confReader->GetDouble("ParticlePropagator::Bz", 0.0); // tk_Bz
 
-  TString buffer;
-  const char *it;
+  tk_etamax_ = etaCoverage(confReader->GetString(Form("%s::EfficiencyFormula", TrackingEfficiency), "abs(eta)<3.0"), TrackingEfficiency, 3.0); // tk_etamax
 
-  {
-    TString tkEffFormula = confReader->GetString(Form("%s::EfficiencyFormula", TrackingEfficiency), "abs(eta)<3.0");
-    tkEffFormula.ReplaceAll("pt", "x");
-    tkEffFormula.ReplaceAll("eta", "y");
-    tkEffFormula.ReplaceAll("phi", "0.");
-
-    buffer.Clear();
-    for(it = tkEffFormula.Data(); *it; ++it)
-    {
-      if(*it == ' ' || *it == '\t' || *it == '\r' || *it == '\n' || *it == '\\') continue;
-      buffer.Append(*it);
-    }
-
-    TF2 *tkEffFunction = new TF2("tkEff", buffer, 0, 1000, -10, 10);
-    TH1F etaHisto("eta", "eta", 100, 5., -5.);
-    Double_t pt, eta;
-    for(int i = 0; i < 1000; ++i)
-    {
-      tkEffFunction->GetRandom2(pt, eta);
-      etaHisto.Fill(eta);
-    }
-    Int_t bin = -1;
-    bin = etaHisto.FindFirstBinAbove(0.5);
-    Double_t etamin = (bin > -1) ? etaHisto.GetBinLowEdge(bin) : -10.;
-    bin = etaHisto.FindLastBinAbove(0.5);
-    Double_t etamax = (bin > -1) ? etaHisto.GetBinLowEdge(bin + 1) : -10.;
-    tk_etamax_ = TMath::Max(fabs(etamin), fabs(etamax)); // tk_etamax
-    delete tkEffFunction;
-  }
-
-  {
-    muondets_.push_back("muons");
-    TString muonEffFormula = confReader->GetString(Form("%s::EfficiencyFormula", MuonEfficiency), "abs(eta)<2.0");
-    muonEffFormula.ReplaceAll("pt", "x");
-    muonEffFormula.ReplaceAll("eta", "y");
-    muonEffFormula.ReplaceAll("phi", "0.");
-
-    buffer.Clear();
-    for(it = muonEffFormula.Data(); *it; ++it)
-    {
-      if(*it == ' ' || *it == '\t' || *it == '\r' || *it == '\n' || *it == '\\') continue;
-      buffer.Append(*it);
-    }
-
-    TF2 *muEffFunction = new TF2("muEff", buffer, 0, 1000, -10, 10);
-    TH1F etaHisto("eta2", "eta2", 100, 5., -5.);
-    Double_t pt, eta;
-    for(int i = 0; i < 1000; ++i)
-    {
-      muEffFunction->GetRandom2(pt, eta);
-      etaHisto.Fill(eta);
-    }
-    Int_t bin = -1;
-    bin = etaHisto.FindFirstBinAbove(0.5);
-    Double_t etamin = (bin > -1) ? etaHisto.GetBinLowEdge(bin) : -10.;
-    bin = etaHisto.FindLastBinAbove(0.5);
-    Double_t etamax = (bin > -1) ? etaHisto.GetBinLowEdge(bin + 1) : -10.;
-    muonSystem_etamax_["muons"] = TMath::Max(fabs(etamin), fabs(etamax)); // muonSystem_etamax
-    delete muEffFunction;
-  }
+  muondets_.push_back("muons");
+  muonSystem_etamax_["muons"] = etaCoverage(confReader->GetString(Form("%s::EfficiencyFormula", MuonEfficiency), "abs(eta)<2.0"), MuonEfficiency, 2.0); // muonSystem_etamax
 
   std::string s(Calorimeters);
   std::replace(s.begin(), s.end(), ',', ' ');
